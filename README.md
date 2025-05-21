@@ -1,7 +1,17 @@
 
 ---
-
 # ⌨│socd│snaptap
+ Sobre o nosso programa ( movimento wasd ) 
+
+**Reescrita e Versões Futuras**
+Estamos atualmente reescrevendo o projeto do zero, integrando tudo em uma ferramenta própria da comunidade B7, com:
+
+- Interface GUI limpa (estilo Hitboxer)
+- Presets editáveis (WASD, Arrow Keys, Fightpad, etc.)
+- SnapTap real (última tecla pressionada vence)
+- SOCD totalmente customizável
+- Perfil para Null Bind universal
+
 
 ---
 ## :calendar: **Início do Projeto Comunitário – Canal B7**
