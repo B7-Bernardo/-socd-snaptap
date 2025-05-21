@@ -1,0 +1,265 @@
+using System;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
+using System.Diagnostics;
+
+// Programa SOCD Cleaner para gerenciar teclas opostas em jogos
+// Implementa a lógica "Last Wins" para WASD ou setas
+// nome do projeto ficara temporariamente como SOCDCleaner
+// Explicação do Código
+// Objetivo: O código implementa um "SOCD Cleaner" que resolve conflitos entre teclas opostas (ex.: pressionar esquerda e direita simultaneamente) usando a lógica "Last Wins", onde a última tecla pressionada tem precedência. Ele suporta WASD ou setas, selecionáveis via interface gráfica.
+// Estrutura:
+// Constantes e Estados: Define constantes para teclas (WASD e setas) e arrays para rastrear estados reais (teclado físico) e virtuais (lógica do software).
+// PInvoke: Usa chamadas à API do Windows (user32.dll, kernel32.dll) para configurar um hook de teclado de baixo nível e injetar eventos de teclado.
+// Hook de Teclado: A função LowLevelKeyboardProc intercepta eventos de teclado, ignora eventos injetados e implementa a lógica SOCD:
+// Quando uma tecla é pressionada, se a tecla oposta está ativa, ela é "liberada" virtualmente.
+// Quando uma tecla é liberada, se a tecla oposta está fisicamente pressionada, ela é "repressionada" virtualmente.
+// Interface Gráfica: Usa Windows Forms para criar uma janela com botões de rádio (WASD e setas) e textos informativos.
+// Funcionalidades:
+// Seleção de Teclas: O usuário pode alternar entre WASD e setas via botões de rádio.
+// Gestão de Erros: Exibe mensagens de erro se o hook ou a janela falharem.
+// Lógica SOCD: Garante que teclas opostas não sejam registradas simultaneamente, ideal para jogos que requerem controle preciso.
+// Notas de Implementação:
+// O código usa System.Windows.Forms para a interface, substituindo a janela nativa do código C.
+// O hook de teclado é configurado com SetWindowsHookEx e removido ao fechar o formulário com UnhookWindowsHookEx.
+// A lógica SOCD é mantida idêntica ao original, mas adaptada para a sintaxe do C#.
+// Os comentários em português são detalhados para facilitar a manutenção e entendimento.
+// Como Executar:
+// Crie um novo projeto Console ou Windows Forms no Visual Studio.
+// Copie o código para um arquivo SOCDCleaner.cs.
+// Adicione a referência ao System.Windows.Forms.
+
+
+namespace SOCDCleaner
+{
+    static class Program
+    {
+        // Constantes para identificar as teclas
+        private const int KEY_LEFT = 0;
+        private const int KEY_RIGHT = 1;
+        private const int KEY_UP = 2;
+        private const int KEY_DOWN = 3;
+        private const int IS_DOWN = 1;
+        private const int IS_UP = 0;
+        private const int WASD_ID = 666;
+        private const int ARROWS_ID = 999;
+
+        // Estados reais (teclado físico) e virtuais (lógica do software)
+        private static readonly int[] real = new int[4];
+        private static readonly int[] virtual = new int[4];
+        private static int left, right, up, down;
+
+        // Mapeamentos de teclas para WASD e setas
+        private static readonly int[] WASD = { 0x41, 0x44, 0x57, 0x53 }; // A, D, W, S
+        private static readonly int[] ARROWS = { 0x25, 0x27, 0x26, 0x28 }; // Esquerda, Direita, Cima, Baixo
+
+        // Estruturas e imports da API do Windows
+        [StructLayout(LayoutKind.Sequential)]
+        private struct KBDLLHOOKSTRUCT
+        {
+            public uint vkCode;
+            public uint scanCode;
+            public uint flags;
+            public uint time;
+            public IntPtr dwExtraInfo;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct KEYBDINPUT
+        {
+            public ushort wVk;
+            public ushort wScan;
+            public uint dwFlags;
+            public uint time;
+            public IntPtr dwExtraInfo;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct INPUT
+        {
+            public uint type;
+            public KEYBDINPUT ki;
+        }
+
+        private const int WH_KEYBOARD_LL = 13;
+        private const int HC_ACTION = 0;
+        private const int LLKHF_INJECTED = 0x00000010;
+        private const int WM_KEYDOWN = 0x0100;
+        private const int WM_KEYUP = 0x0101;
+        private const int WM_SYSKEYDOWN = 0x0104;
+        private const int WM_SYSKEYUP = 0x0105;
+        private const int KEYEVENTF_KEYUP = 0x0002;
+        private const int INPUT_KEYBOARD = 1;
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
+
+        [DllImport("user32.dll")]
+        private static extern bool UnhookWindowsHookEx(IntPtr hhk);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr GetModuleHandle(string lpModuleName);
+
+        private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
+
+        private static IntPtr hookId = IntPtr.Zero;
+
+        // Define as teclas de controle (WASD ou setas)
+        private static void SetBindings(int[] bindings)
+        {
+            left = bindings[0];
+            right = bindings[1];
+            up = bindings[2];
+            down = bindings[3];
+        }
+
+        // Encontra a tecla oposta para uma dada tecla
+        private static int FindOpposingKey(int key)
+        {
+            if (key == left) return right;
+            if (key == right) return left;
+            if (key == up) return down;
+            if (key == down) return up;
+            return -1;
+        }
+
+        // Encontra o índice da tecla no array de estados
+        private static int FindIndexByKey(int key)
+        {
+            if (key == left) return KEY_LEFT;
+            if (key == right) return KEY_RIGHT;
+            if (key == up) return KEY_UP;
+            if (key == down) return KEY_DOWN;
+            return -1;
+        }
+
+        // Função de callback para o hook de teclado
+        private static IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam)
+        {
+            if (nCode != HC_ACTION) return CallNextHookEx(hookId, nCode, wParam, lParam);
+
+            var kbStruct = (KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(KBDLLHOOKSTRUCT));
+            if ((kbStruct.flags & LLKHF_INJECTED) != 0) return CallNextHookEx(hookId, nCode, wParam, lParam);
+
+            int key = (int)kbStruct.vkCode;
+            int opposing = FindOpposingKey(key);
+            if (opposing < 0) return CallNextHookEx(hookId, nCode, wParam, lParam);
+
+            int index = FindIndexByKey(key);
+            int opposingIndex = FindIndexByKey(opposing);
+
+            INPUT[] input = new INPUT[1];
+            input[0].type = INPUT_KEYBOARD;
+
+            if (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN)
+            {
+                real[index] = IS_DOWN;
+                virtual[index] = IS_DOWN;
+                if (real[opposingIndex] == IS_DOWN && virtual[opposingIndex] == IS_DOWN)
+                {
+                    input[0].ki = new KEYBDINPUT { wVk = (ushort)opposing, dwFlags = KEYEVENTF_KEYUP };
+                    SendInput(1, input, Marshal.SizeOf<INPUT>());
+                    virtual[opposingIndex] = IS_UP;
+                }
+            }
+            else if (wParam == (IntPtr)WM_KEYUP || wParam == (IntPtr)WM_SYSKEYUP)
+            {
+                real[index] = IS_UP;
+                virtual[index] = IS_UP;
+                if (real[opposingIndex] == IS_DOWN)
+                {
+                    input[0].ki = new KEYBDINPUT { wVk = (ushort)opposing };
+                    SendInput(1, input, Marshal.SizeOf<INPUT>());
+                    virtual[opposingIndex] = IS_DOWN;
+                }
+            }
+
+            return CallNextHookEx(hookId, nCode, wParam, lParam);
+        }
+
+        [STAThread]
+        static void Main()
+        {
+            // Inicializa os estados das teclas
+            for (int i = 0; i < 4; i++)
+            {
+                real[i] = IS_UP;
+                virtual[i] = IS_UP;
+            }
+
+            // Define WASD como padrão
+            SetBindings(WASD);
+
+            // Configura o hook de teclado
+            hookId = SetWindowsHookEx(WH_KEYBOARD_LL, LowLevelKeyboardProc, GetModuleHandle(null), 0);
+            if (hookId == IntPtr.Zero)
+            {
+                MessageBox.Show($"Falha ao configurar o hook de teclado, código de erro: {Marshal.GetLastWin32Error()}", "Erro", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+
+            // Cria o formulário principal
+            Form mainForm = new Form
+            {
+                Text = "SOCD Helper para Gamers Épicos!",
+                Size = new System.Drawing.Size(460, 200),
+                StartPosition = FormStartPosition.CenterScreen
+            };
+
+            // Adiciona texto informativo
+            Label textLabel = new Label
+            {
+                Text = "\"Last Wins\" é o único modo disponível no momento.",
+                Location = new System.Drawing.Point(10, 10),
+                Size = new System.Drawing.Size(400, 20)
+            };
+            mainForm.Controls.Add(textLabel);
+
+            Label textLabel1 = new Label
+            {
+                Text = "Vínculos de teclas arbitrários serão adicionados depois. Por agora, apenas WASD ou setas. Hardcode suas teclas e compile você mesmo ou me contate no Discord canal do b7.",
+                Location = new System.Drawing.Point(10, 30),
+                Size = new System.Drawing.Size(400, 70),
+                AutoSize = false
+            };
+            mainForm.Controls.Add(textLabel1);
+
+            // Adiciona botões de rádio para WASD e setas
+            RadioButton wasdRadio = new RadioButton
+            {
+                Text = "WASD",
+                Location = new System.Drawing.Point(10, 100),
+                Size = new System.Drawing.Size(100, 30),
+                Checked = true
+            };
+            wasdRadio.CheckedChanged += (s, e) => { if (wasdRadio.Checked) SetBindings(WASD); };
+            mainForm.Controls.Add(wasdRadio);
+
+            RadioButton arrowsRadio = new RadioButton
+            {
+                Text = "Setas",
+                Location = new System.Drawing.Point(10, 120),
+                Size = new System.Drawing.Size(100, 30)
+            };
+            arrowsRadio.CheckedChanged += (s, e) => { if (arrowsRadio.Checked) SetBindings(ARROWS); };
+            mainForm.Controls.Add(arrowsRadio);
+
+            // Configura o evento de fechamento do formulário
+            mainForm.FormClosing += (s, e) =>
+            {
+                UnhookWindowsHookEx(hookId);
+            };
+
+            Application.Run(mainForm);
+        }
+    }
+}
